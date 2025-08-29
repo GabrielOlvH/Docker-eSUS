@@ -37,7 +37,7 @@ services:
     # Define como construir a imagem para este serviço.
     build:
       # O contexto é o diretório onde o Dockerfile e o entrypoint.sh estão localizados.
-      context:./esus-app-dockerfile
+      context: ./esus-app-dockerfile
       # Passa o argumento de construção 'URL_DOWNLOAD_ESUS' para o Dockerfile.
       # O valor será obtido da variável de ambiente definida no Coolify.
       args:
