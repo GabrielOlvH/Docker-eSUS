@@ -29,9 +29,7 @@ RUN wget --progress=bar:force -O esus-installer.jar "${URL_DOWNLOAD_ESUS}"
 # para garantir que o conteúdo real da aplicação esteja disponível.
 # Se a extração for bem-sucedida, o.jar principal da aplicação estará dentro.
 # Se não, o próprio 'esus-installer.jar' é o executável.
-RUN unzip -o esus-installer.jar |
-
-| echo "Não foi possível extrair, assumindo que é um JAR executável."
+RUN unzip -o esus-installer.jar || echo "Não foi possível extrair, assumindo que é um JAR executável."
 
 # -----------------------------------------------------------------------------
 
