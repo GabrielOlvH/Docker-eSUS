@@ -1,86 +1,63 @@
-# docker-compose.yml para eSUS PEC em Coolify
+# docker-compose.yml (VERSÃO FINAL)
+version: "3.8"
 
-# Define a versão do formato do arquivo Compose. '3.8' é uma versão moderna e estável.
-version: '3.8'
+networks:
+  esus-net:
+    driver: bridge
 
-services:
-  # ---------------------------------------------------------------------------
-  # Serviço do Banco de Dados (esus-db)
-  # ---------------------------------------------------------------------------
-  esus-db:
-    # Utiliza a imagem oficial do PostgreSQL, versão 9.6-alpine.
-    # A tag 'alpine' refere-se a uma versão baseada em Alpine Linux, que é muito leve.
-    image: postgres:9.6-alpine
-    container_name: esus-db
-    # Política de reinicialização: 'unless-stopped' garante que o contêiner
-    # reinicie automaticamente em caso de falha ou após a reinicialização do servidor,
-    # a menos que tenha sido parado manualmente.
-    restart: unless-stopped
-    volumes:
-      # Mapeia o volume nomeado 'esus-db-data' para o diretório de dados do PostgreSQL
-      # dentro do contêiner. Isso garante a persistência dos dados.
-      - esus-db-data:/var/lib/postgresql/data
-    environment:
-      # Variáveis de ambiente padrão para a imagem oficial do PostgreSQL.
-      # Elas são usadas para criar o banco de dados e o usuário na primeira inicialização.
-      - POSTGRES_DB=${POSTGRES_DB:-esus}
-      - POSTGRES_USER=${POSTGRES_USER:-esus}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD} # Esta variável deve ser fornecida pelo Coolify
-      - TZ=${TZ:-America/Sao_Paulo} # Define o fuso horário para consistência
-    networks:
-      - esus-net
-
-  # ---------------------------------------------------------------------------
-  # Serviço da Aplicação (esus-app)
-  # ---------------------------------------------------------------------------
-  esus-app:
-    # Define como construir a imagem para este serviço.
-    build:
-      # O contexto é o diretório onde o Dockerfile e o entrypoint.sh estão localizados.
-      context: ./esus-app-dockerfile
-      # Passa o argumento de construção 'URL_DOWNLOAD_ESUS' para o Dockerfile.
-      # O valor será obtido da variável de ambiente definida no Coolify.
-      args:
-        - URL_DOWNLOAD_ESUS=${URL_DOWNLOAD_ESUS}
-    container_name: esus-app
-    restart: unless-stopped
-    # 'depends_on' garante que o serviço 'esus-db' seja iniciado antes do 'esus-app'.
-    # Nota: Isso não garante que o PostgreSQL esteja pronto para aceitar conexões,
-    # por isso o script entrypoint.sh é necessário.
-    depends_on:
-      - esus-db
-    environment:
-      # Variáveis de ambiente necessárias para a aplicação eSUS PEC se conectar ao banco de dados.
-      # Note que o host do banco de dados é o nome do serviço 'esus-db'.
-      - APP_DB_URL=jdbc:postgresql://esus-db:5432/${POSTGRES_DB:-esus}
-      - APP_DB_USER=${POSTGRES_USER:-esus}
-      - APP_DB_PASSWORD=${POSTGRES_PASSWORD} # Deve ser a mesma senha do serviço de banco de dados
-      - TZ=${TZ:-America/Sao_Paulo}
-    networks:
-      - esus-net
-    # Labels são metadados cruciais para a integração com o proxy reverso do Coolify (Traefik).
-    labels:
-      # Habilita a descoberta deste serviço pelo Traefik.
-      - "traefik.enable=true"
-      # Define o roteador HTTP para este serviço.
-      - "traefik.http.routers.esus-app.rule=Host(`${FQDN_ESUS}`)"
-      # Define o ponto de entrada para tráfego HTTPS.
-      - "traefik.http.routers.esus-app.entrypoints=https"
-      # Habilita a resolução de certificados TLS (SSL) via Let's Encrypt.
-      - "traefik.http.routers.esus-app.tls.certresolver=letsencrypt"
-      # Define o serviço backend para o qual o tráfego será encaminhado.
-      - "traefik.http.services.esus-app.loadbalancer.server.port=8080"
-
-# ---------------------------------------------------------------------------
-# Definições de Nível Superior
-# ---------------------------------------------------------------------------
 volumes:
-  # Define o volume nomeado para a persistência dos dados do banco de dados.
   esus-db-data:
     driver: local
 
-networks:
-  # Define a rede customizada para os serviços.
-  # Isso proporciona um isolamento de rede e permite a resolução de nomes de serviço (DNS).
-  esus-net:
-    driver: bridge
+services:
+  # ---------------------------------------------------------------------------
+  # SERVIÇO DO BANCO DE DADOS (esus-db) - COM HEALTHCHECK
+  # ---------------------------------------------------------------------------
+  esus-db:
+    image: postgres:9.6-alpine
+    container_name: esus-db
+    restart: unless-stopped
+    volumes:
+      - esus-db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-esus}
+      - POSTGRES_USER=${POSTGRES_USER:-esus}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD} # Será lido do Secret do Coolify
+      - TZ=${TZ:-America/Sao_Paulo}
+    networks:
+      - esus-net
+    # --- NOVO: Verificação de saúde para o banco de dados ---
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-esus} -d ${POSTGRES_DB:-esus}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # SERVIÇO DA APLICAÇÃO (esus-app) - MODIFICADO
+  # ---------------------------------------------------------------------------
+  esus-app:
+    build:
+      context: ./esus-app-dockerfile
+      args:
+        URL_DOWNLOAD_ESUS: ${URL_DOWNLOAD_ESUS}
+    container_name: esus-app
+    restart: unless-stopped
+    # --- MODIFICADO: Agora espera o 'healthcheck' do banco passar ---
+    depends_on:
+      esus-db:
+        condition: service_healthy
+    environment:
+      - APP_DB_URL=jdbc:postgresql://esus-db:5432/${POSTGRES_DB:-esus}
+      - APP_DB_USER=${POSTGRES_USER:-esus}
+      - APP_DB_PASSWORD=${POSTGRES_PASSWORD} # Será lido do Secret do Coolify
+      - TZ=${TZ:-America/Sao_Paulo}
+    networks:
+      - esus-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.esus-app.rule=Host(`${FQDN_ESUS}`)"
+      - "traefik.http.routers.esus-app.entrypoints=https"
+      - "traefik.http.routers.esus-app.tls.certresolver=letsencrypt"
+      - "traefik.http.services.esus-app.loadbalancer.server.port=8080"
